@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="description" content="코코포리아 룸 주크박스 웹 청취자">
+  <title>주크박스 · 함께 듣기</title>
+  <link rel="stylesheet" href="style.css">
+  <script defer src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+  <script defer src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+  <script defer src="firebase-config.js"></script>
+  <script defer src="app.js"></script>
+</head>
+<body>
+  <main class="shell">
+    <header class="topbar">
+      <div class="brand"><span class="brand-icon" aria-hidden="true">♫</span><div><h1>주크박스</h1><span>친구들과 같은 곡, 같은 순간</span></div></div>
+      <div class="live" id="live-pill"><span aria-hidden="true"></span><span id="room-label">방 확인 중</span></div>
+    </header>
+
+    <section class="join-card" id="join-card" aria-labelledby="join-title">
+      <div class="illustration" aria-hidden="true"><span>♪</span><span>♫</span><span>♩</span></div>
+      <p class="eyebrow">INVITED LISTENER</p>
+      <h2 id="join-title">함께 들을 준비됐어?</h2>
+      <p class="muted">닉네임을 정하면 주크박스에 입장해. 기존 플레이어 ID나 시트 목록은 건드리지 않아.</p>
+      <form id="join-form">
+        <label for="nickname">내 닉네임</label>
+        <div class="join-actions"><input id="nickname" maxlength="30" autocomplete="nickname" placeholder="예: 딸기" required><button type="submit" class="primary">입장하고 듣기 <span aria-hidden="true">↗</span></button></div>
+      </form>
+      <p class="feedback" id="join-error" role="alert" hidden></p>
+    </section>
+
+    <section id="listener-app" class="workspace" hidden>
+      <section class="player-card" aria-label="현재 음악">
+        <div class="player-top"><p class="eyebrow">NOW PLAYING</p><span class="room-status" id="playing-badge">대기 중</span></div>
+        <div id="video-wrap"><div id="youtube-player"></div></div>
+        <div class="track-info"><div class="track-icon" aria-hidden="true">♫</div><div class="track-copy"><h2 id="track-title">음악을 기다리는 중</h2><p id="track-meta">GM이 음악을 재생하면 이곳에서 들을 수 있어.</p></div></div>
+        <div class="progress-area"><div class="progress"><div id="progress-fill"></div></div><div class="timing"><span id="track-time">0:00</span><span id="repeat-label">전체 반복</span></div></div>
+        <div class="transport"><button type="button" class="primary listen-button" id="allow-play"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg><span>소리 재생 허용</span></button><label class="volume"><span>내 볼륨</span><input id="volume" type="range" min="0" max="100" value="70" aria-label="개인 볼륨"><output id="volume-value">70%</output></label></div>
+        <div class="connection"><span class="connection-mark" aria-hidden="true"></span><span id="connection-status" role="status" aria-live="polite">연결 준비 중…</span></div>
+      </section>
+      <aside class="sidebar">
+        <section class="side-card"><div class="side-heading"><h2>듣고 있는 사람</h2><span class="count" id="listener-count">0</span></div><div class="listener-list" id="listeners-list"><p class="empty">아직 청취자가 없어.</p></div></section>
+        <section class="side-card"><div class="side-heading"><h2>현재 플레이리스트</h2><span class="playlist-tag" id="playlist-name">없음</span></div><div class="queue" id="queue"><p class="empty">음악이 추가되면 여기에 표시돼.</p></div></section>
+        <section class="me-card"><div class="avatar" id="my-avatar">♪</div><div><strong id="my-name">게스트</strong><span>웹 청취자 · 일시 참가</span></div><button type="button" id="leave-button" title="나가기">나가기</button></section>
+      </aside>
+    </section>
+    <footer>이 페이지는 음악 재생을 듣기만 해. 재생·정지와 목록 편집 권한은 코코포리아 확장프로그램에 있어.</footer>
+  </main>
+</body>
+</html>
