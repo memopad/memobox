@@ -11,7 +11,7 @@
     sessionId: '', playback: null, playlists: [], listeners: [],
     subs: [], heartbeat: null, clock: null, player: null, youtubeReady: false,
     currentVideo: '', currentRevision: null, playerTime: 0, volume: 70,
-    playbackError: '', autoplayBlocked: false
+    playbackError: '', autoplayBlocked: false, selectedPlaylistId: ''
   };
 
   const text = (id, value) => { const node = $(id); if (node) node.textContent = String(value || ''); };
@@ -62,7 +62,7 @@
     list.replaceChildren();
     const active = state.listeners.filter(l => l.listening === true && timestampMs(l.updatedAt) > Date.now() - STALE_AFTER);
     text('listener-count', String(active.length));
-    if (!active.length) { addTextItem(list, 'empty', '아직 청취자가 없어.'); return; }
+    if (!active.length) { addTextItem(list, 'empty', '없음'); return; }
     for (const entry of active) {
       const row = document.createElement('div'); row.className = 'person';
       const name = String(entry.name || entry.playerId || '청취자').slice(0, 48);
@@ -72,24 +72,50 @@
       list.append(row);
     }
   }
+  function renderTabs() {
+    const target = $('playlist-tabs');
+    target.replaceChildren();
+    const selected = state.playlists.find(p => p.id === state.selectedPlaylistId)
+      || state.playlists.find(p => p.id === state.playback?.playlistId)
+      || state.playlists[0];
+    if (!state.playlists.length) {
+      addTextItem(target, 'empty', '플레이리스트 없음');
+      return null;
+    }
+    for (const playlist of state.playlists) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.textContent = String(playlist.name || '이름 없음').slice(0, 70);
+      button.title = button.textContent;
+      button.className = 'jb-tab' + (playlist.id === selected?.id ? ' is-active' : '');
+      button.setAttribute('aria-pressed', String(playlist.id === selected?.id));
+      button.addEventListener('click', () => {
+        state.selectedPlaylistId = playlist.id;
+        renderQueue();
+      });
+      target.append(button);
+    }
+    return selected;
+  }
   function renderQueue() {
     const target = $('queue'); target.replaceChildren();
-    const playlist = state.playlists.find(p => p.id === state.playback?.playlistId);
-    text('playlist-name', playlist?.name || '없음');
-    if (!playlist?.tracks?.length) { addTextItem(target, 'empty', '음악이 추가되면 여기에 표시돼.'); return; }
+    const playlist = renderTabs();
+    if (!playlist?.tracks?.length) { addTextItem(target, 'empty', '곡 없음'); return; }
     playlist.tracks.forEach((track, idx) => {
       const row = document.createElement('div');
-      row.className = 'queue-row' + (track.videoId === state.playback?.videoId && Number(state.playback?.trackIndex) === idx ? ' now' : '');
-      addTextItem(row, 'num', String(idx+1).padStart(2,'0'));
-      const title = addTextItem(row, 'queue-title', String(track.title || track.videoId || '곡').slice(0,120));
+      row.className = 'queue-row' + (
+        playlist.id === state.playback?.playlistId &&
+        track.videoId === state.playback?.videoId &&
+        Number(state.playback?.trackIndex) === idx ? ' now' : '');
+      addTextItem(row, 'num', String(idx + 1) + '.');
+      const title = addTextItem(row, 'queue-title', String(track.title || track.videoId || '곡').slice(0, 120));
       title.title = title.textContent;
       target.append(row);
     });
   }
   function renderPlaying() {
     const p = state.playback;
-    text('track-title', p?.title || '음악을 기다리는 중');
-    text('track-meta', p?.videoId ? '코코포리아 룸과 재생 위치 동기화' : 'GM이 음악을 재생하면 이곳에서 들을 수 있어.');
+    text('track-title', p?.title || '재생 중인 곡 없음');
     text('repeat-label', ({off:'반복 없음', one:'한 곡 반복', all:'전체 반복'})[p?.repeatMode] || '전체 반복');
     text('playing-badge', p?.playing ? '재생 중' : (p?.videoId ? '일시정지' : '대기 중'));
     updateTime();
@@ -145,12 +171,12 @@
           onStateChange: event => {
             if (event.data === YT.PlayerState.PLAYING) {
               state.autoplayBlocked = false;
-              status('청취 중 · 재생 위치 동기화됨');
+              status('연결됨');
             }
           },
           onAutoplayBlocked: () => {
             state.autoplayBlocked = true;
-            status('자동재생이 차단됐어. 소리 재생 허용을 눌러 줘.');
+            status('재생 허용 필요');
           },
           onError: event => status('이 YouTube 영상은 재생이 제한될 수 있어. (오류 '+event.data+')', true)
         }
@@ -198,8 +224,8 @@
     subscribe(doc.collection('playback').doc('current'), snapshot => {
       state.playback = snapshot.exists ? snapshot.data() : null;
       renderPlaying(); syncPlayback();
-      if (state.playback) status('연결됨 · 현재 음악과 동기화 중');
-      else status('연결됨 · GM의 음악을 기다리는 중');
+      if (state.playback) status('연결됨');
+      else status('연결됨 · 대기 중');
     });
     subscribe(doc.collection('playlists').orderBy('order'), snapshot => {
       state.playlists = snapshot.docs.map(d => ({id:d.id,...d.data(),tracks:Array.isArray(d.data().tracks)?d.data().tracks:[]}));
@@ -211,6 +237,7 @@
   }
   async function join(event) {
     event.preventDefault();
+    $('join-error').hidden = true;
     const name = $('nickname').value.trim().slice(0,30);
     if (!VALID_ROOM) { text('join-error','유효한 룸 초대 링크가 아니야. GM에게 링크를 다시 요청해 줘.'); $('join-error').hidden=false; return; }
     if (!name) { text('join-error','닉네임을 입력해 줘.'); $('join-error').hidden=false; return; }
@@ -226,7 +253,7 @@
       state.ref = state.db.collection('jukeboxRooms').doc(state.roomId).collection('listeners').doc(state.sessionId);
       try { localStorage.setItem('ccsp-jb-guest-nickname',name); } catch (_) {}
       text('my-name',name);
-      text('my-avatar',name[0]);
+      $('my-identity').hidden = false;
       $('join-card').hidden = true; $('listener-app').hidden = false;
       await writePresence();
       if (!state.joined) return;
@@ -235,6 +262,8 @@
       connect();
       mountYoutube();
     } catch (err) {
+      $('my-identity').hidden = true;
+      $('listener-app').hidden = true; $('join-card').hidden = false;
       state.joined = false;
       text('join-error',err.message);
       $('join-error').hidden=false;
@@ -251,18 +280,41 @@
     state.player=null;state.playback=null;state.playlists=[];state.listeners=[];
     $('video-wrap').replaceChildren(Object.assign(document.createElement('div'),{id:'youtube-player'}));
     $('listener-app').hidden=true;$('join-card').hidden=false;
+    $('my-identity').hidden = true;
+    state.selectedPlaylistId = '';
+    setLibraryCollapsed(false);
+    setExtrasCollapsed(false);
     $('live-pill').classList.remove('connected');
   }
 
+  function setExtrasCollapsed(collapsed) {
+    const button = $('toggle-extras');
+    $('player-details').hidden = Boolean(collapsed);
+    button.setAttribute('aria-expanded', String(!collapsed));
+    button.title = collapsed ? '재생 정보 펼치기' : '재생 정보 접기';
+    button.setAttribute('aria-label', button.title);
+    button.classList.toggle('is-collapsed', Boolean(collapsed));
+  }
+  function setLibraryCollapsed(collapsed) {
+    const folded = Boolean(collapsed);
+    document.querySelector('.shell').classList.toggle('library-collapsed', folded);
+    $('toggle-library').setAttribute('aria-expanded', String(!folded));
+    $('toggle-library-reopen').hidden = !folded;
+  }
+  $('toggle-extras').addEventListener('click', () => {
+    setExtrasCollapsed(!$('player-details').hidden);
+  });
+  $('toggle-library').addEventListener('click', () => setLibraryCollapsed(true));
+  $('toggle-library-reopen').addEventListener('click', () => setLibraryCollapsed(false));
   $('join-form').addEventListener('submit',join);
   $('leave-button').addEventListener('click',leave);
   $('allow-play').addEventListener('click', () => {
-    if (!state.youtubeReady || !state.player) return status('YouTube 플레이어를 준비 중이야. 잠시 후 다시 눌러 줘.');
+    if (!state.youtubeReady || !state.player) return status('플레이어 준비 중');
     try {
       state.player.setVolume(state.volume);
       syncPlayback();
       if (state.playback?.playing) state.player.playVideo();
-      status('음악 재생을 요청했어. 영상이 제한되어 있다면 다른 곡으로 바꿔 줘.');
+      status('재생 요청됨');
     } catch (error) { status('재생 허용 오류: '+error.message,true); }
   });
   $('volume').addEventListener('input',event => {
@@ -274,6 +326,6 @@
   });
   window.addEventListener('beforeunload', () => { if (state.ref) state.ref.delete().catch(()=>{}); });
   try { $('nickname').value = localStorage.getItem('ccsp-jb-guest-nickname') || ''; } catch (_) {}
-  text('room-label', VALID_ROOM ? '초대된 룸 · '+room.slice(0,8) : '잘못된 초대 링크');
-  if (!VALID_ROOM) { text('join-error','링크에 유효한 ?room=룸ID가 없어. GM에게 초대 링크를 다시 요청해 줘.'); $('join-error').hidden=false; $('join-form').querySelector('button').disabled=true; }
+  text('room-label', VALID_ROOM ? 'ROOM · '+room.slice(0,12) : '잘못된 링크');
+  if (!VALID_ROOM) { text('join-error','유효하지 않은 룸 주소입니다.'); $('join-error').hidden=false; $('join-form').querySelector('button').disabled=true; }
 })();
