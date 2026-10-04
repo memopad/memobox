@@ -5,11 +5,12 @@
   const videoPattern = /^[A-Za-z0-9_-]{11}$/;
   const room = new URL(location.href).searchParams.get('room') || '';
   const VALID_ROOM = /^[A-Za-z0-9_-]{4,180}$/.test(room);
-  const STALE_AFTER = 95000;
+  // Legacy clients publish a 30-second heartbeat; new clients publish join/leave events only.
+  const LEGACY_STALE_AFTER = 95000;
   const state = {
     db: null, nickname: '', roomId: room, joined: false, ref: null,
     sessionId: '', playback: null, playlists: [], listeners: [],
-    subs: [], heartbeat: null, clock: null, player: null, youtubeReady: false,
+    subs: [], clock: null, player: null, youtubeReady: false,
     currentVideo: '', currentRevision: null, playerTime: 0, volume: 70,
     playbackError: '', autoplayBlocked: false, selectedPlaylistId: ''
   };
@@ -60,7 +61,8 @@
   function renderListeners() {
     const list = $('listeners-list');
     list.replaceChildren();
-    const active = state.listeners.filter(l => l.listening === true && timestampMs(l.updatedAt) > Date.now() - STALE_AFTER);
+    const active = state.listeners.filter(l => l.listening === true && (
+      l.presenceMode === 'event' || timestampMs(l.updatedAt) > Date.now() - LEGACY_STALE_AFTER));
     text('listener-count', String(active.length));
     if (!active.length) { addTextItem(list, 'empty', '없음'); return; }
     for (const entry of active) {
@@ -125,7 +127,7 @@
     text('track-time', fmt(pos));
     const duration = state.youtubeReady ? Math.max(0, Number(state.player?.getDuration?.() || 0)) : 0;
     $('progress-fill').style.width = duration > 0 ? `${Math.min(100,Math.max(0,pos/duration*100))}%` : '0%';
-    // Presence snapshots already repaint the list; only expire stale entries periodically.
+    // Snapshot changes refresh event-based listeners; only legacy heartbeats need expiry.
     if (Math.floor(Date.now()/1000) % 10 === 0) renderListeners();
   }
   async function writePresence(leaving = false) {
@@ -134,7 +136,7 @@
       if (leaving) return await state.ref.delete();
       await state.ref.set({
         guest: true, playerId: 'web:' + state.sessionId, name: state.nickname,
-        listening: true, updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+        listening: true, presenceMode: 'event', updatedAt: firebase.firestore.FieldValue.serverTimestamp()
       }, {merge:false});
     } catch (error) { status('청취자 상태 저장 실패: ' + (error.code || error.message), true); }
   }
@@ -248,6 +250,7 @@
       state.sessionId = getSession();
       state.volume = Number($('volume').value);
       state.joined = true;
+      exitCleanupQueued = false;
       state.ref = state.db.collection('jukeboxRooms').doc(state.roomId).collection('listeners').doc(state.sessionId);
       try { localStorage.setItem('ccsp-jb-guest-nickname',name); } catch (_) {}
       text('my-name',name);
@@ -255,7 +258,6 @@
       $('join-card').hidden = true; $('listener-app').hidden = false;
       await writePresence();
       if (!state.joined) return;
-      state.heartbeat = setInterval(() => writePresence(),30000);
       state.clock = setInterval(updateTime,1000);
       connect();
       mountYoutube();
@@ -271,7 +273,7 @@
   async function leave() {
     state.joined = false;
     for (const unsub of state.subs.splice(0)) try { unsub(); } catch (_) {}
-    clearInterval(state.heartbeat); clearInterval(state.clock);
+    clearInterval(state.clock);
     await writePresence(true);
     state.ref = null; state.youtubeReady=false;state.currentVideo='';state.currentRevision=null;
     try { state.player?.destroy(); } catch (_) {}
@@ -320,9 +322,24 @@
     try { state.player?.setVolume(state.volume); } catch (_) {}
   });
   document.addEventListener('visibilitychange', () => {
-    if (!document.hidden && state.joined) { syncPlayback(true); writePresence(); }
+    if (!document.hidden && state.joined) syncPlayback(true);
   });
-  window.addEventListener('beforeunload', () => { if (state.ref) state.ref.delete().catch(()=>{}); });
+  // Closing a tab cannot guarantee completion of an async Firestore delete.
+  // Request cleanup on pagehide, with beforeunload as a fallback; prevent duplicate requests.
+  let exitCleanupQueued = false;
+  function requestExitCleanup() {
+    if (!state.joined || !state.ref || exitCleanupQueued) return;
+    exitCleanupQueued = true;
+    state.ref.delete().catch(() => {});
+  }
+  window.addEventListener('pagehide', requestExitCleanup);
+  window.addEventListener('beforeunload', requestExitCleanup);
+  window.addEventListener('pageshow', event => {
+    if (!event.persisted) return;
+    exitCleanupQueued = false;
+    // A BFCache restoration reverses a previous pagehide cleanup.
+    if (state.joined) writePresence();
+  });
   try { $('nickname').value = localStorage.getItem('ccsp-jb-guest-nickname') || ''; } catch (_) {}
   text('room-label', VALID_ROOM ? 'ROOM · '+room.slice(0,12) : '잘못된 링크');
   if (!VALID_ROOM) { text('join-error','유효하지 않은 룸 주소입니다.'); $('join-error').hidden=false; $('join-form').querySelector('button').disabled=true; }
