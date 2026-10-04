@@ -75,17 +75,15 @@
   function renderTabs() {
     const target = $('playlist-tabs');
     target.replaceChildren();
-    const selected = state.playlists.find(p => p.id === state.selectedPlaylistId)
-      || state.playlists.find(p => p.id === state.playback?.playlistId)
-      || state.playlists[0];
+    const selected = state.playlists[0];
     if (!state.playlists.length) {
       addTextItem(target, 'empty', '플레이리스트 없음');
       return null;
     }
-    for (const playlist of state.playlists) {
+    for (const playlist of state.playlists.slice(0,1)) {
       const button = document.createElement('button');
       button.type = 'button';
-      button.textContent = String(playlist.name || '이름 없음').slice(0, 70);
+      button.textContent = '룸';
       button.title = button.textContent;
       button.className = 'jb-tab' + (playlist.id === selected?.id ? ' is-active' : '');
       button.setAttribute('aria-pressed', String(playlist.id === selected?.id));
@@ -227,7 +225,7 @@
       if (state.playback) status('연결됨');
       else status('연결됨 · 대기 중');
     });
-    subscribe(doc.collection('playlists').orderBy('order'), snapshot => {
+    subscribe(doc.collection('playlists').orderBy('order').limit(1), snapshot => {
       state.playlists = snapshot.docs.map(d => ({id:d.id,...d.data(),tracks:Array.isArray(d.data().tracks)?d.data().tracks:[]}));
       renderQueue();
     });
