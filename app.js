@@ -1,4 +1,4 @@
-/* Read-only guest playback for CCFOLIA jukebox; only guest presence is written. */
+/* Room-only web jukebox. Global room permissions optionally allow playback and playlist editing. */
 (() => {
   'use strict';
   const $ = id => document.getElementById(id);
@@ -12,7 +12,8 @@
     sessionId: '', playback: null, playlists: [], listeners: [],
     subs: [], clock: null, player: null, youtubeReady: false,
     currentVideo: '', currentRevision: null, playerTime: 0, volume: 70,
-    playbackError: '', autoplayBlocked: false, selectedPlaylistId: ''
+    playbackError: '', autoplayBlocked: false, selectedPlaylistId: '',
+    roomData: null, permissions: {play:false, edit:false, manage:false}
   };
 
   const text = (id, value) => { const node = $(id); if (node) node.textContent = String(value || ''); };
@@ -31,6 +32,25 @@
   const fmt = value => {
     const sec = Math.max(0, Math.floor(Number(value) || 0));
     return `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`;
+  };
+  function videoId(value) {
+    const raw = String(value || '').trim();
+    if (videoPattern.test(raw)) return raw;
+    try {
+      const parsed = new URL(raw);
+      const host = parsed.hostname.toLowerCase();
+      let id = '';
+      if (host === 'youtu.be' || host === 'www.youtu.be') id = parsed.pathname.split('/')[1] || '';
+      else if (['youtube.com','www.youtube.com','m.youtube.com','music.youtube.com','youtube-nocookie.com','www.youtube-nocookie.com'].includes(host))
+        id = parsed.searchParams.get('v') || parsed.pathname.match(/^\/(?:embed|shorts|live)\/([A-Za-z0-9_-]{11})/)?.[1] || '';
+      return videoPattern.test(id) ? id : '';
+    } catch (_) { return ''; }
+  }
+  const icon = {
+    play:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8 5 11 7-11 7V5Z"/></svg>',
+    up:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 15 7-7 7 7"/></svg>',
+    down:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 9 7 7 7-7"/></svg>',
+    del:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5l14 14M19 5 5 19"/></svg>'
   };
   const playbackPosition = p => {
     if (!p) return 0;
@@ -97,10 +117,21 @@
     }
     return selected;
   }
+  function renderPermissionUI() {
+    const editable = Boolean(state.permissions.edit);
+    $('playlist-editor').hidden = !editable;
+  }
+  function actionButton(parent, html, title, handler) {
+    const button = document.createElement('button');
+    button.type = 'button'; button.className = 'queue-action'; button.innerHTML = html;
+    button.title = title; button.setAttribute('aria-label', title);
+    button.addEventListener('click', handler); parent.append(button); return button;
+  }
   function renderQueue() {
     const target = $('queue'); target.replaceChildren();
     const playlist = renderTabs();
-    if (!playlist?.tracks?.length) { addTextItem(target, 'empty', '곡 없음'); return; }
+    renderPermissionUI();
+    if (!playlist?.tracks?.length) { addTextItem(target, 'empty', '음악을 추가해주세요.'); return; }
     playlist.tracks.forEach((track, idx) => {
       const row = document.createElement('div');
       row.className = 'queue-row' + (
@@ -110,6 +141,17 @@
       addTextItem(row, 'num', String(idx + 1) + '.');
       const title = addTextItem(row, 'queue-title', String(track.title || track.videoId || '곡').slice(0, 120));
       title.title = title.textContent;
+      if (state.permissions.edit) title.addEventListener('contextmenu', event => {
+        event.preventDefault(); renameTrack(idx);
+      });
+      const actions = document.createElement('div'); actions.className = 'queue-actions';
+      if (state.permissions.play) actionButton(actions, icon.play, '방 전체에서 재생', () => playTrack(idx));
+      if (state.permissions.edit) {
+        actionButton(actions, icon.up, '위로 이동', () => moveTrack(idx,-1)).disabled = idx === 0;
+        actionButton(actions, icon.down, '아래로 이동', () => moveTrack(idx,1)).disabled = idx === playlist.tracks.length-1;
+        actionButton(actions, icon.del, '삭제', () => deleteTrack(idx));
+      }
+      if (actions.childElementCount) row.append(actions);
       target.append(row);
     });
   }
@@ -219,8 +261,65 @@
     const unsubscribe = ref.onSnapshot(accept, err => status('Firestore 연결 오류: '+(err.code || err.message),true));
     state.subs.push(unsubscribe);
   }
+  const roomRef = () => state.db.collection('jukeboxRooms').doc(state.roomId);
+  const roomPlaylist = () => state.playlists[0] || null;
+  async function updateRoomTracks(tracks) {
+    const list = roomPlaylist();
+    if (!list || !state.permissions.edit) return;
+    await roomRef().collection('playlists').doc(list.id).update({tracks});
+  }
+  async function addTrack() {
+    if (!state.permissions.edit) return;
+    const list = roomPlaylist();
+    if (!list) return status('룸 플레이리스트를 찾을 수 없습니다.', true);
+    const id = videoId($('track-url').value);
+    const name = $('track-name').value.trim();
+    if (!id) return status('YouTube 주소가 올바르지 않습니다.', true);
+    if (list.tracks.length >= 1000) return status('룸 플레이리스트에는 최대 1000곡까지 저장할 수 있습니다.', true);
+    const track = {id:`${Date.now().toString(36)}-${Math.random().toString(36).slice(2,7)}`, videoId:id, title:name.slice(0,120)||`YouTube · ${id}`, addedBy:'web:'+state.sessionId};
+    try { await updateRoomTracks([...list.tracks,track]); $('track-url').value=''; $('track-name').value=''; }
+    catch (error) { status('곡 추가 오류: '+error.message,true); }
+  }
+  async function renameTrack(index) {
+    if (!state.permissions.edit) return;
+    const list = roomPlaylist(), track = list?.tracks?.[index]; if (!track) return;
+    const name = prompt('곡 이름 변경',track.title||track.videoId)?.trim(); if (!name || name===track.title) return;
+    const tracks = list.tracks.map((item,i)=>i===index?{...item,title:name.slice(0,120)}:item);
+    try {
+      await updateRoomTracks(tracks);
+      if (state.playback?.playlistId===list.id && state.playback?.videoId===track.videoId)
+        await roomRef().collection('playback').doc('current').set({title:name.slice(0,120)},{merge:true});
+    } catch (error) { status('곡 이름 변경 오류: '+error.message,true); }
+  }
+  async function deleteTrack(index) {
+    if (!state.permissions.edit) return; const list=roomPlaylist(); if (!list?.tracks?.[index]) return;
+    try { await updateRoomTracks(list.tracks.filter((_,i)=>i!==index)); }
+    catch (error) { status('곡 삭제 오류: '+error.message,true); }
+  }
+  async function moveTrack(index,delta) {
+    if (!state.permissions.edit) return; const list=roomPlaylist(); if (!list) return;
+    const to=index+delta; if (index<0||to<0||to>=list.tracks.length) return; const tracks=[...list.tracks];
+    [tracks[index],tracks[to]]=[tracks[to],tracks[index]];
+    try { await updateRoomTracks(tracks); } catch (error) { status('순서 변경 오류: '+error.message,true); }
+  }
+  async function playTrack(index) {
+    if (!state.permissions.play) return; const list=roomPlaylist(), track=list?.tracks?.[index]; if (!track) return;
+    try {
+      await roomRef().collection('playback').doc('current').set({
+        playlistId:list.id,trackIndex:index,videoId:track.videoId,title:track.title||track.videoId,playing:true,position:0,
+        repeatMode:state.playback?.repeatMode||'all',updatedBy:'web:'+state.sessionId,
+        changedAt:firebase.firestore.FieldValue.serverTimestamp(),revision:firebase.firestore.FieldValue.increment(1)
+      },{merge:true});
+    } catch (error) { status('재생 설정 저장 실패: '+error.message,true); }
+  }
   function connect() {
-    const doc = state.db.collection('jukeboxRooms').doc(state.roomId);
+    const doc = roomRef();
+    subscribe(doc, snapshot => {
+      state.roomData = snapshot.exists ? snapshot.data() : null;
+      const grants = state.roomData?.globalPermissions || {};
+      state.permissions = {play:Boolean(grants.play), edit:Boolean(grants.edit), manage:Boolean(grants.manage)};
+      renderQueue();
+    });
     subscribe(doc.collection('playback').doc('current'), snapshot => {
       state.playback = snapshot.exists ? snapshot.data() : null;
       renderPlaying(); syncPlayback();
@@ -277,7 +376,7 @@
     await writePresence(true);
     state.ref = null; state.youtubeReady=false;state.currentVideo='';state.currentRevision=null;
     try { state.player?.destroy(); } catch (_) {}
-    state.player=null;state.playback=null;state.playlists=[];state.listeners=[];
+    state.player=null;state.playback=null;state.playlists=[];state.listeners=[];state.roomData=null;state.permissions={play:false,edit:false,manage:false};
     $('video-wrap').replaceChildren(Object.assign(document.createElement('div'),{id:'youtube-player'}));
     $('listener-app').hidden=true;$('join-card').hidden=false;
     $('my-identity').hidden = true;
@@ -308,6 +407,13 @@
   $('toggle-library-reopen').addEventListener('click', () => setLibraryCollapsed(false));
   $('join-form').addEventListener('submit',join);
   $('leave-button').addEventListener('click',leave);
+  $('add-track').addEventListener('click',addTrack);
+  $('track-url').addEventListener('keydown',event => {
+    if (event.key !== 'Enter' || event.isComposing) return; event.preventDefault(); $('track-name').focus(); $('track-name').select?.();
+  });
+  $('track-name').addEventListener('keydown',event => {
+    if (event.key !== 'Enter' || event.isComposing) return; event.preventDefault(); addTrack();
+  });
   $('allow-play').addEventListener('click', () => {
     if (!state.youtubeReady || !state.player) return status('플레이어 준비 중');
     try {

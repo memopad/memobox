@@ -92,3 +92,15 @@ button:focus-visible, input:focus-visible { outline: 2px solid #a6a6ab; outline-
   .volume { gap: 4px; }
   .volume input { width: 55px; }
 }
+
+/* v21: room editing follows global jukebox permissions; keep the list visually flat. */
+.jb-add {display:grid;gap:4px;min-width:0;}
+.jb-add > input, .jb-add-bottom > input {min-width:0;width:100%;padding:7px 9px;border:1px solid var(--line);border-radius:5px;background:var(--subbg);color:var(--text);}
+.jb-add-bottom {display:flex;align-items:center;gap:4px;min-width:0;}
+.jb-add-bottom > input {flex:1 1 0;}
+.queue-row, .queue-row.now {background:transparent;}
+.queue-row.now .queue-title {font-weight:650;}
+.queue-title {cursor:context-menu;flex:1 1 0;}
+.queue-actions {margin-left:auto;display:flex;align-items:center;gap:1px;flex:0 0 auto;}
+.queue-action {width:22px;height:22px;display:inline-grid;place-items:center;padding:2px;border-radius:4px;}
+.queue-action svg {width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;}
